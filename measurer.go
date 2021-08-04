@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"io"
 	"log"
 	"net/http"
 	"net/http/cookiejar"
@@ -34,7 +36,7 @@ type httpResponse struct {
 	BodySize int
 
 	// Idx is the index of this response in the redirect chain. The
-	// last response in the chain has index zero.
+	// first response in the chain has index zero.
 	Idx int
 
 	// Request is the corresponding request.
@@ -70,7 +72,7 @@ func measure(URL *URLEntry) *httpMeasurement {
 // measureWithContext is like measure but with a context.
 func measureWithContext(ctx context.Context, URL *URLEntry) *httpMeasurement {
 	m := &httpMeasurement{OrigURL: URL.URL, Filename: URL.Filename}
-	newMeasurer(m).do(ctx, URL.URL)
+	newMeasurer(m).doAll(ctx, URL.URL)
 	return m
 }
 
@@ -86,38 +88,72 @@ type measurer struct {
 
 // newMeasurer creates a new instance of measurer.
 func newMeasurer(m *httpMeasurement) *measurer {
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		panic(err) // this should not happen.
+	}
 	return &measurer{
 		clnt: &http.Client{
 			Transport: &http.Transport{},
-			Jar:       &cookiejar.Jar{},
+			Jar:       jar,
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
 		},
 		m: m,
 	}
 }
 
 // do performs the measurement and saves the results into m.
-func (m *measurer) do(ctx context.Context, URL string) {
+func (m *measurer) doAll(ctx context.Context, URL string) {
+	for URL != "" {
+		if len(m.m.Responses) > 10 {
+			f := "too many redirections"
+			m.m.Failure = &f
+			return
+		}
+		URL = m.doOne(ctx, URL)
+	}
+}
+
+// doOne performs a single measurement and saves the results into m. Return
+// the next URL in the redirection chain or an empty string.
+func (m *measurer) doOne(ctx context.Context, URL string) string {
 	req, err := http.NewRequestWithContext(ctx, "GET", URL, nil)
 	if err != nil {
 		f := err.Error()
 		m.m.Failure = &f
-		return
+		return ""
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := m.clnt.Do(req)
 	if err != nil {
 		f := err.Error()
 		m.m.Failure = &f
-		return
+		return ""
 	}
 	defer resp.Body.Close()
-	for idx := 0; resp != nil; idx++ {
-		m.m.Responses = append(m.m.Responses, httpResponse{
-			Code: resp.StatusCode,
-			Idx:  idx,
-			Request: httpRequest{
-				URL: resp.Request.URL.String(),
-			},
-		})
-		resp = resp.Request.Response
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		f := err.Error()
+		m.m.Failure = &f
+		return ""
 	}
+	m.m.Responses = append(m.m.Responses, httpResponse{
+		Code:     resp.StatusCode,
+		Idx:      len(m.m.Responses),
+		BodySize: len(data),
+		Request: httpRequest{
+			URL: resp.Request.URL.String(),
+		},
+	})
+	location, err := resp.Location()
+	if err != nil && !errors.Is(err, http.ErrNoLocation) {
+		f := err.Error()
+		m.m.Failure = &f
+		return ""
+	}
+	if errors.Is(err, http.ErrNoLocation) {
+		return ""
+	}
+	return location.String()
 }
