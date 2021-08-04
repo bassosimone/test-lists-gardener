@@ -78,6 +78,7 @@ func measureWithContext(ctx context.Context, URL *URLEntry) *httpMeasurement {
 		m.Failure = &f
 		return m
 	}
+	defer resp.Body.Close()
 	for idx := 0; resp != nil; idx++ {
 		m.Responses = append(m.Responses, httpResponse{
 			Code: resp.StatusCode,
