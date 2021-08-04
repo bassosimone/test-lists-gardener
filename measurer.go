@@ -106,6 +106,7 @@ func newMeasurer(m *httpMeasurement) *measurer {
 
 // do performs the measurement and saves the results into m.
 func (m *measurer) doAll(ctx context.Context, URL string) {
+	defer m.clnt.CloseIdleConnections()
 	for URL != "" {
 		if len(m.m.Responses) > 10 {
 			f := "too many redirections"
