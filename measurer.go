@@ -66,17 +66,23 @@ func measure(URL *URLEntry) *httpMeasurement {
 // measureWithContext is like measure but with a context.
 func measureWithContext(ctx context.Context, URL *URLEntry) *httpMeasurement {
 	m := &httpMeasurement{OrigURL: URL.URL, Filename: URL.Filename}
-	req, err := http.NewRequestWithContext(ctx, "GET", URL.URL, nil)
+	m.do(ctx, URL.URL)
+	return m
+}
+
+// do performs the measurement and saves the results into m.
+func (m *httpMeasurement) do(ctx context.Context, URL string) {
+	req, err := http.NewRequestWithContext(ctx, "GET", URL, nil)
 	if err != nil {
 		f := err.Error()
 		m.Failure = &f
-		return m
+		return
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		f := err.Error()
 		m.Failure = &f
-		return m
+		return
 	}
 	defer resp.Body.Close()
 	for idx := 0; resp != nil; idx++ {
@@ -89,5 +95,4 @@ func measureWithContext(ctx context.Context, URL *URLEntry) *httpMeasurement {
 		})
 		resp = resp.Request.Response
 	}
-	return m
 }
